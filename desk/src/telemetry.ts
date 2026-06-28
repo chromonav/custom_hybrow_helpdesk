@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { createResource } from "frappe-ui";
-import "../../../frappe/frappe/public/js/lib/posthog.js";
+import "./vendor/posthog.js";
 
 const APP = "custom_hybrow_helpdesk";
 const SITENAME = window.location.hostname;
