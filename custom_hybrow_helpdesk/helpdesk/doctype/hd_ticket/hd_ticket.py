@@ -541,6 +541,57 @@ class HDTicket(Document):
                 "HD Ticket Comment", c.name, attachment.get("file_url")
             )
 
+    def get_team_customer_contact_recipients(self):
+        """Return all email recipients from this ticket's HD Team Customer Contacts."""
+        if not self.agent_group:
+            return []
+
+        contact_names = frappe.get_all(
+            "HD Team Customer Contact",
+            filters={"parent": self.agent_group, "parenttype": "HD Team"},
+            pluck="contact",
+        )
+        if not contact_names:
+            return []
+
+        recipients = []
+
+        primary_emails = frappe.get_all(
+            "Contact",
+            filters={"name": ["in", contact_names]},
+            pluck="email_id",
+        )
+        recipients.extend(primary_emails)
+
+        contact_email_rows = frappe.get_all(
+            "Contact Email",
+            filters={"parent": ["in", contact_names], "parenttype": "Contact"},
+            pluck="email_id",
+        )
+        recipients.extend(contact_email_rows)
+
+        return recipients
+
+    def add_team_customer_contacts_to_recipients(self, recipients):
+        """Append HD Team Customer Contacts to outgoing ticket reply recipients."""
+        all_recipients = frappe.utils.split_emails(recipients or "")
+        all_recipients.extend(self.get_team_customer_contact_recipients())
+
+        # Preserve order while removing duplicates and invalid empty values.
+        deduped = []
+        seen = set()
+        for recipient in all_recipients:
+            email = parseaddr(recipient or "")[1]
+            if not email:
+                continue
+            email_key = email.lower()
+            if email_key in seen:
+                continue
+            seen.add(email_key)
+            deduped.append(email)
+
+        return ", ".join(deduped)
+
     @frappe.whitelist()
     def reply_via_agent(
         self,
@@ -560,6 +611,8 @@ class HDTicket(Document):
         if recipients == "Administrator":
             admin_email = frappe.get_value("User", "Administrator", "email")
             recipients = admin_email
+
+        recipients = self.add_team_customer_contacts_to_recipients(recipients)
 
         communication = frappe.get_doc(
             {
