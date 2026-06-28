@@ -10,7 +10,6 @@
   "team_name",
   "assignment_rule",
   "users",
-  "customer_contacts",
   "column_break_feto",
   "ignore_restrictions"
  ],
@@ -33,13 +32,6 @@
    "fieldtype": "Table MultiSelect",
    "label": "Users",
    "options": "HD Team Member"
-  },
-  {
-   "description": "Customer contacts listed here can view all tickets for their linked Customer when the ticket belongs to this team.",
-   "fieldname": "customer_contacts",
-   "fieldtype": "Table",
-   "label": "Customer Contacts",
-   "options": "HD Team Customer Contact"
   },
   {
    "default": "0",
