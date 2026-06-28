@@ -1111,6 +1111,42 @@ class HDTicket(Document):
         return fields
 
 
+def _sql_list(values):
+    return ", ".join(frappe.db.escape(value) for value in values if value)
+
+
+def _get_user_hd_teams(user):
+    """Return HD Teams where the given user is listed as an agent/team member."""
+    if not user or user == "Guest":
+        return []
+
+    return frappe.get_all("HD Team Member", filters={"user": user}, pluck="parent")
+
+
+def _get_customer_contact_hd_teams(user):
+    """Return HD Teams where the user's Contact is listed under Customer Contacts."""
+    if not user or user == "Guest":
+        return []
+
+    contact_names = frappe.get_all(
+        "Contact",
+        filters={"email_id": user},
+        pluck="name",
+    )
+    if frappe.db.exists("Contact", user):
+        contact_names.append(user)
+
+    contact_names = list(set(contact_names))
+    if not contact_names:
+        return []
+
+    return frappe.get_all(
+        "HD Team Customer Contact",
+        filters={"contact": ["in", contact_names]},
+        pluck="parent",
+    )
+
+
 # Check if `user` has access to this specific ticket (`doc`). This implements extra
 # permission checks which is not possible with standard permission system. This function
 # is being called from hooks. `doc` is the ticket to check against
@@ -1119,12 +1155,19 @@ def has_permission(doc, user=None):
     if not user:
         user = frappe.session.user
 
+    if doc.contact == user or doc.raised_by == user or doc.owner == user or is_admin(user):
+        return True
+
+    # Hybrow customisation:
+    # A customer-linked user should not automatically see every ticket of that
+    # customer. They can see another customer's ticket only when the ticket belongs
+    # to an HD Team where their Contact is listed in Customer Contacts.
+    customer_names = get_customer(user)
+    user_team_names = _get_customer_contact_hd_teams(user)
     if (
-        doc.contact == user
-        or doc.raised_by == user
-        or doc.owner == user
-        or is_admin(user)
-        or doc.customer in get_customer(user)
+        doc.customer in customer_names
+        and doc.get("agent_group")
+        and doc.get("agent_group") in user_team_names
     ):
         return True
 
@@ -1148,7 +1191,7 @@ def has_permission(doc, user=None):
 
     team_names = [t.team_name for t in teams]
     exists = frappe.db.exists(
-        "HD Team Member", {"parent": ["in", team_names], "user": frappe.session.user}
+        "HD Team Member", {"parent": ["in", team_names], "user": user}
     )
     if exists and doc.get("agent_group") in team_names:
         return True
@@ -1165,15 +1208,24 @@ def permission_query(user):
     if is_admin(user):
         return
 
-    #  To handle the case for normal users i.e. not agents
-    customer = get_customer(user)
+    # Own tickets are always visible to the requester/contact/owner.
     query = "(`tabHD Ticket`.owner = {user} OR `tabHD Ticket`.contact = {user} OR `tabHD Ticket`.raised_by = {user})".format(
         user=frappe.db.escape(user)
     )
-    for c in customer:
-        query += " OR `tabHD Ticket`.customer={customer}".format(
-            customer=frappe.db.escape(c)
-        )
+
+    # Hybrow customisation for customer portal visibility:
+    # Customer users can see other tickets of their linked Customer only when the
+    # ticket's HD Team/agent_group is one of the teams where their Contact is listed
+    # in Customer Contacts.
+    customer_names = get_customer(user)
+    user_team_names = _get_customer_contact_hd_teams(user)
+    if customer_names and user_team_names:
+        customers = _sql_list(customer_names)
+        teams = _sql_list(user_team_names)
+        query += (
+            " OR (`tabHD Ticket`.customer in ({customers}) "
+            "AND `tabHD Ticket`.agent_group in ({teams}))"
+        ).format(customers=customers, teams=teams)
 
     if not is_agent(user):
         return query
@@ -1200,10 +1252,8 @@ def permission_query(user):
         all_teams = frappe.get_all("HD Team", pluck="name")
         if not all_teams:
             return query
-        all_teams = ", ".join(f"'{team}'" for team in all_teams)
-        query += f" OR (`tabHD Ticket`.agent_group in ({all_teams}))".format(
-            all_teams=all_teams
-        )
+        all_teams = _sql_list(all_teams)
+        query += f" OR (`tabHD Ticket`.agent_group in ({all_teams}))"
         if not show_tickets_without_team:
             query += " OR (`tabHD Ticket`.agent_group is null)"
         return query
@@ -1214,10 +1264,8 @@ def permission_query(user):
         return query
 
     # Here we will apply the restriction based on the teams the agent belongs to.
-    team_names = ", ".join(f"'{team}'" for team in team_names)
-    query += f" OR (`tabHD Ticket`.agent_group in ({team_names}))".format(
-        team_names=team_names
-    )
+    team_names = _sql_list(team_names)
+    query += f" OR (`tabHD Ticket`.agent_group in ({team_names}))"
     return query
 
 
